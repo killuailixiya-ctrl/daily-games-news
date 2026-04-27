@@ -1,96 +1,100 @@
-import feedparser
+import os
+import requests
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
-from datetime import datetime
 
-# 配置 RSS 源
-RSS_FEEDS = {
-    "games": [
-        "https://www.gamespot.com/feeds/mashup/",
-        "https://rss.gamer.com.tw/news.xml"
-    ],
-    "ai": [
-        "https://openai.com/blog/rss/",
-        "https://ai.googleblog.com/feeds/posts/default"
-    ],
+# ===================== 固定配置 =====================
+NEWS_API_KEY = os.getenv("NEWS_API_KEY")
+EMAIL_USER = os.getenv("EMAIL_USER")
+EMAIL_PWD = os.getenv("EMAIL_PWD")
+RECEIVER = "killuailixiya@163.com"  # 你的收件邮箱，已写死
+
+NEWS_API_URL = "https://newsapi.org/v2/everything"
+GAME_QUERY = "game OR video game OR steam OR playstation OR xbox"
+AI_QUERY = "artificial intelligence OR AI OR OpenAI OR Google AI OR Meta AI"
+AUTHORIZED_SOURCES = {
+    "game": ["ign.com", "gamespot.com", "kotaku.com", "store.steampowered.com"],
+    "ai": ["openai.com", "ai.google", "ai.meta.com", "technologyreview.com", "venturebeat.com"]
 }
+COUNT_PER_CATEGORY = 10
+# ======================================================
 
-# 抓取RSS数据
-def fetch_news(feed_urls, category):
-    news_list = []
-    for url in feed_urls:
-        feed = feedparser.parse(url)
-        for entry in feed.entries:
-            news = {
-                "category": category,
-                "title": entry.title,
-                "summary": entry.summary,
-                "link": entry.link,
-                "published": entry.get("published", "N/A"),
-            }
-            news_list.append(news)
-    return news_list
-
-# 按重要性排序
-def sort_news(news_list):
-    return sorted(news_list, key=lambda x: x['published'], reverse=True)
-
-# 生成Markdown日报
-def generate_markdown(news_items):
-    date_string = datetime.now().strftime("%Y-%m-%d")
-    markdown = f"# 游戏与AI新闻日报 - {date_string}\n\n"
-    for item in news_items:
-        markdown += f"## {item['category']}\n\n"
-        markdown += f"**标题**: {item['title']}\n\n"
-        markdown += f"**内容概要**: {item['summary']}\n\n"
-        markdown += f"**来源**: [原文链接]({item['link']})\n\n"
-        markdown += "---\n\n"
-    return markdown
-
-# 发送邮件
-def send_email(content, subject, recipient_email):
-    # 邮件发送配置
-    smtp_server = "smtp.163.com"
-    smtp_port = 465
-    sender_email = "your_email@163.com"
-    sender_password = "your_app_password"
-
-    # 设置邮件内容
-    msg = MIMEMultipart()
-    msg['From'] = sender_email
-    msg['To'] = recipient_email
-    msg['Subject'] = subject
-    msg.attach(MIMEText(content, 'plain'))
-
-    # 发送邮件
+def translate_title(text):
     try:
-        server = smtplib.SMTP_SSL(smtp_server, smtp_port)
-        server.login(sender_email, sender_password)
-        server.sendmail(sender_email, recipient_email, msg.as_string())
-        server.quit()
-        print("邮件发送成功")
-    except Exception as e:
-        print(f"邮件发送失败: {e}")
+        url = f"https://api.mymemory.translated.net/get?q={text}&langpair=en|zh-CN"
+        res = requests.get(url, timeout=5).json()
+        return res["responseData"]["translatedText"]
+    except:
+        return "翻译失败"
 
-# 主函数
-def main():
-    all_news = []
-    for category, urls in RSS_FEEDS.items():
-        news = fetch_news(urls, category)
-        all_news.extend(news)
-    
-    sorted_news = sort_news(all_news)
-    markdown_content = generate_markdown(sorted_news)
-    
-    # 将日报存储到本地文件
-    with open("daily_news.md", "w", encoding="utf-8") as file:
-        file.write(markdown_content)
-    
-    # 发送邮件
-    subject = "每日游戏与AI新闻日报"
-    recipient_email = "killuailixiya@163.com"
-    send_email(markdown_content, subject, recipient_email)
+def fetch_news(category, query):
+    params = {
+        "q": query, "apiKey": NEWS_API_KEY, "language": "en",
+        "sortBy": "publishedAt", "pageSize": 20
+    }
+    articles = requests.get(NEWS_API_URL, params=params, timeout=10).json().get("articles", [])
+    if not articles: return []
+
+    sorted_articles = []
+    authorized = AUTHORIZED_SOURCES[category]
+    for art in articles:
+        if any(domain in art["url"] for domain in authorized):
+            sorted_articles.append(art)
+    for art in articles:
+        if art not in sorted_articles:
+            sorted_articles.append(art)
+
+    final_news = sorted_articles[:COUNT_PER_CATEGORY]
+    result = []
+    for news in final_news:
+        en_title = news["title"].strip()
+        cn_title = translate_title(en_title)
+        result.append({
+            "category": "🎮 游戏资讯" if category == "game" else "🤖 AI 科技",
+            "title_en": en_title, "title_cn": cn_title,
+            "summary": news["description"] or "无概要",
+            "source": news["source"]["name"] or "未知来源",
+            "url": news["url"]
+        })
+    return result
+
+def generate_daily_report(game_news, ai_news):
+    html = """
+    <html><head><meta charset="utf-8">
+    <h2>每日游戏&AI重要新闻日报</h2>
+    <p>每日10:00自动发送 | 游戏10条+AI10条 | 按重要度排序</p><hr></head><body>
+    """
+    all_news = game_news + ai_news
+    for idx, news in enumerate(all_news, 1):
+        html += f"""
+        <div style="margin:15px 0;padding:10px;border-left:4px solid #0066cc;">
+            <b>序号：{idx}</b><br>
+            <b>类目：</b>{news['category']}<br>
+            <b>标题：</b>【中文】{news['title_cn']}<br>
+            <b>　　　</b>【英文】{news['title_en']}<br>
+            <b>内容概要：</b>{news['summary']}<br>
+            <b>信息源：</b>{news['source']}<br>
+            <b>原文链接：</b><a href="{news['url']}">点击查看</a>
+        </div><hr>
+        """
+    html += "</body></html>"
+    return html
+
+def send_email(html_content):
+    msg = MIMEMultipart()
+    msg["From"] = EMAIL_USER
+    msg["To"] = RECEIVER
+    msg["Subject"] = "📰 每日游戏&AI新闻日报"
+    msg.attach(MIMEText(html_content, "html", "utf-8"))
+
+    with smtplib.SMTP_SSL("smtp.163.com", 465) as server:
+        server.login(EMAIL_USER, EMAIL_PWD)
+        server.sendmail(EMAIL_USER, RECEIVER, msg.as_string())
+    print("邮件发送成功！")
 
 if __name__ == "__main__":
-    main()
+    game_news = fetch_news("game", GAME_QUERY)
+    ai_news = fetch_news("ai", AI_QUERY)
+    report = generate_daily_report(game_news, ai_news)
+    send_email(report)
