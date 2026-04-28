@@ -1,20 +1,55 @@
 name: 每日新闻日报
+
 on:
   schedule:
-    - cron: "0 2 * * *"  # 北京时间 每天早10:00 自动运行
-  workflow_dispatch:  # 手动测试按钮
+    - cron: "0 2 * * *"  # 每天UTC时间凌晨2点（北京时间早10点）
+  workflow_dispatch:      # 手动按钮测试
 
 jobs:
   send-news:
     runs-on: ubuntu-latest
     steps:
+      # 检出代码
       - uses: actions/checkout@v4
+
+      # 配置 Python 环境
       - uses: actions/setup-python@v5
-        with: {python-version: "3.10"}
-      - run: pip install requests
+        with: 
+          python-version: "3.10"
+
+      # 安装依赖
+      - name: 安装依赖
+        run: pip install requests
+        # 增加日志确认安装的 Python 和依赖版本
+      - run: |
+          echo "Python version:"
+          python --version
+          echo "Installed packages:"
+          pip list
+
+      # 日志检查环境变量
+      - name: 检查环境变量
+        run: |
+          echo "检查 NEWS_API_KEY 是否可用..."
+          echo "邮箱用户 EMAIL_USER=${{ secrets.EMAIL_USER }}"
+          if [[ -z "${{ secrets.NEWS_API_KEY }}" ]]; then
+            echo "Error: NEWS_API_KEY 未配置" && exit 1
+          else
+            echo "NEWS_API_KEY 配置成功"
+          fi
+
+      # 运行每日新闻脚本并捕获异常
       - name: 运行脚本
         env:
           NEWS_API_KEY: ${{ secrets.NEWS_API_KEY }}
           EMAIL_USER: ${{ secrets.EMAIL_USER }}
           EMAIL_PWD: ${{ secrets.EMAIL_PWD }}
-        run: python main.py
+        run: |
+          echo "开始运行 main.py 脚本..."
+          if ! python main.py; then
+            echo "脚本执行失败，请检查问题！" && exit 1
+          fi
+
+      # 输出完成日志
+      - name: 任务完成
+        run: echo "工作流运行成功，邮件已发送！"
